@@ -1,12 +1,13 @@
-# AAOS の「走行中はここまで」を、実機なしで adb だけで再現する
+# Android Automotive OS (AAOS) の「走行中」を adb で再現する方法
 
 ## はじめに
 
-車が走り出した瞬間にアプリの画面が切り替わる、あの挙動を自分のアプリで再現したいと思ったことはないだろうか。
-実車もドライブシミュレータも要らない。AAOS Emulator に adb で VHAL イベントを流し込むだけで、速度もギアも思いのままに偽装できる。
-本記事は「ギアを Drive に入れたら画面が『走っています』に変わる」ところまでを、コードとコマンドの実物付きで最短距離でたどる。
+車両が走り出した瞬間にアプリの画面が切り替わる、あの挙動を自身のアプリでも再現してみたいと思ったことはないだろうか？
 
-## 結論（ここだけ読めば分かること）
+AAOS Emulator に対して adb 経由で VHAL イベントを送信するだけで、車速やギアなどの車両状態を任意に変更できる。
+本記事では、「車速を 10 に設定すると画面が『走っています』へ切り替わる」という動作を題材に、必要なコードとコマンドを交えながら、その実現方法を最短の手順で解説する。
+
+## ポイント
 
 - **車両状態の判定は速度値を直接見ず、`CarUxRestrictionsManager` の `UX_RESTRICTIONS_NO_VIDEO` を監視する。** これが動画アプリなど実車向け制御の定石で、AAOS が速度・ギアから算出した「今どこまで許すか」をそのまま使える。
 - **テストは実機不要。** `adb shell dumpsys activity service com.android.car inject-vhal-event <property> <value>` で速度・ギアを注入すれば、アプリの表示が切り替わることを Emulator 上で確認できる。
@@ -91,7 +92,7 @@ class MainActivity : ComponentActivity() {
 
 ### イベントが発火してから Text が変わるまで
 
-「ギアを変えた」→「画面の文字が変わる」までを1本の線でつなぐと、登場人物は4つだけだ。ポイントは、`applyRestrictions` を呼ぶルートが**2本**あること（初期表示とコールバック）、そして最後は Compose が**自動で**再描画すること。
+「ギアを変えた」→「画面の文字が変わる」までを1本の線でつなぐ。ポイントは、`applyRestrictions` を呼ぶルートが**2本**あること（初期表示とコールバック）、そして最後は Compose が**自動で**再描画すること。
 
 ```
 ① 準備（onCreate → onStart）
@@ -118,11 +119,11 @@ class MainActivity : ComponentActivity() {
    Text(text = if (moving) "走っています" else "止まっています")   ← 文字が切り替わる
 ```
 
-読みどころは3点。
+確認するべき3点
 
 - **`applyRestrictions` の呼び出し口は2つだけ。** ①`onStart` で `currentCarUxRestrictions` を渡す初回の1発（登録直後はコールバックが来ないので現在値を手で反映）、②登録した `listener` 経由で、状態が変わるたびに `CarUxRestrictionsManager` が呼ぶ。
 - **登録しているのは「関数」ではなく「関数を呼ぶラムダ」。** `registerListener` に渡すのは `applyRestrictions(r)` を呼ぶ `listener`。だから購読の登録（`onStart`）と解除（`onStop` の `unregisterListener`）が画面のライフサイクルにきれいに乗る。
-- **Text を差し替えるコードは誰も呼ばない。** `moving` は `mutableStateOf` の State で、`Text` がそれを**読んでいる**。`applyRestrictions` が `moving` に代入した瞬間、Compose が依存箇所だけを再実行して文字が変わる。手続き的な `setText()` は登場しない。
+- **Text を差し替えるコードは誰も呼ばない。** `moving` は `mutableStateOf` の State で、`Text` がそれを**読んでいる**。`applyRestrictions` が `moving` に代入した瞬間、Compose が依存箇所だけを再実行して文字が変わる。手続き的な `setText()` は使われない。
 
 ビルド設定で忘れがちなのが2点。`android.car` はシステム API なので `build.gradle.kts` の `android {}` に `useLibrary("android.car")` が要る。そして Manifest には AAOS 専用であることを示す `uses-feature android.hardware.type.automotive`（required）を入れる。UX 制限の *読み取り* に追加パーミッションは不要だった。
 
@@ -200,3 +201,7 @@ python3 -c 'import sys;d=open("raw.bin","rb").read();i=d.find(b"\x89PNG\r\n\x1a\
 ## 参照
 
 - サンプルのソース一式: https://github.com/aRaikoFunakami/VehicleStateDemo
+- Android Automotive OS のドキュメント: https://source.android.com/devices/automotive
+- 運転状態と UX 制限の利用: https://source.android.com/docs/automotive/driver_distraction/consume
+- VehicleProperty.aidl: https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/automotive/vehicle/aidl_property/android/hardware/automotive/vehicle/VehicleProperty.aidl
+- VehicleGear.aidl: https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/automotive/vehicle/aidl_property/android/hardware/automotive/vehicle/VehicleGear.aidl
